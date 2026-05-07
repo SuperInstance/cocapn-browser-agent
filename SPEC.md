@@ -4,7 +4,9 @@
 
 Chrome now ships Gemini Nano as a built-in AI model (~4GB, downloaded automatically on capable hardware). The Prompt API, Summarizer API, Writer API, Translator API are all available in Chrome 126+ with no server infrastructure needed. This means our git-native agents and PLATO systems can run directly in the browser — zero install, zero backend for the AI layer.
 
-vdmo (GitHub: vdmo) builds visual/web tools: **PodiumJS** (WebGPU alternative to Curtains.js), **lesssgo** (browser VJ mixer), **cms reset api**. Their vibe is "keeping it live and interactive, research in visual and web." We can use their tech as the visual layer for our agent systems.
+vdmo (GitHub: [@vdmo](https://github.com/vdmo)) builds visual/web tools: **PodiumJS** (WebGPU alternative to Curtains.js), **lesssgo** (browser VJ mixer), **cms reset api**. Their vibe is "keeping it live and interactive, research in visual and web." We use their PodiumJS as the visual layer for our agent dashboard — see `cocapn-ai-web` below.
+
+> **Note on collaboration:** vdmo's founder reached out to Casey about working together — our projects synergize. We ship high-quality work with anything we use from their repos and credit them properly in all READMEs.
 
 ---
 

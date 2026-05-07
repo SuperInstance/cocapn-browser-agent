@@ -19,5 +19,5 @@
 
 export { Captain } from './captain.js';
 export type { CaptainOptions, CaptainDecision, HardConstraintConfig, ConstraintViolation, CaptainDeliberation, SpecialistReport } from './captain.js';
-export { createGeminiNanoAdapter, isGeminiNanoAvailable, createAutoAdapter } from './model_adapters.js';
+export { isGeminiNanoAvailable, createGeminiNanoAdapter, createAutoAdapter } from './model_adapters.js';
 export type { ModelAdapter, AIModelResponse } from './model_adapters.js';

@@ -1,9 +1,15 @@
 /**
- * Gemini Nano Adapter — Chrome Built-in AI
+ * Gemini Nano Adapter — Chrome Built-in AI via Prompt API
  * 
- * Wraps Chrome's built-in Prompt API (Gemini Nano) as an inference backend.
+ * Wraps Chrome's built-in Prompt API (LanguageModel) as an inference backend.
+ * Uses navigator.ai.gemini — available in Chrome 148+ (Prompt API stable).
  * Zero network calls when Gemini Nano is available.
  * Falls back to cloud APIs when unavailable.
+ * 
+ * Hardware requirements (Chrome built-in AI):
+ * - Windows 10+, macOS 13+, Linux, ChromeOS (Chromebook Plus)
+ * - 22GB+ free storage (model is ~4GB)
+ * - GPU with 4GB+ VRAM OR CPU with 16GB+ RAM + 4 cores
  */
 
 export interface AIModelResponse {
@@ -11,70 +17,146 @@ export interface AIModelResponse {
   finishReason?: 'stop' | 'max_tokens' | 'unknown';
 }
 
+/** Chrome built-in AI availability result */
+interface AvailabilityResult {
+  readonly state: 'available' | 'downloading' | 'updating' | 'no-model' | 'unsupported';
+}
+
+/** Chrome's built-in LanguageModel (Prompt API) — extend global to avoid TS errors */
+declare global {
+  interface Navigator {
+    ai?: {
+      gemini?: {
+        readonly availability: () => Promise<AvailabilityResult>;
+        readonly create: (options?: LanguageModelCreateOptions) => Promise<LanguageModelSession>;
+      };
+    };
+  }
+}
+
+interface LanguageModelCreateOptions {
+  systemPrompt?: string;
+  temperature?: number;
+  topK?: number;
+  signal?: AbortSignal;
+}
+
+interface LanguageModelSession {
+  prompt(text: string, options?: { context?: string }): Promise<string>;
+  promptStreaming(text: string): ReadableStream<string>;
+  destroy(): void;
+}
+
 /**
- * Check if Chrome's built-in AI is available on this device/browser.
- * navigator.ai.gemini?.ready indicates Gemini Nano is downloaded and ready.
+ * Check if Chrome's built-in AI (Prompt API) is available.
+ * 
+ * Checks navigator.ai.gemini.availability() — returns 'available' when
+ * Gemini Nano is downloaded and ready, 'downloading' during initial download,
+ * 'no-model' when not downloaded, 'unsupported' when hardware doesn't support it.
  */
-export async function isGeminiNanoAvailable(): Promise<boolean> {
-  if (typeof navigator === 'undefined') return false;
-  
+export async function isGeminiNanoAvailable(): Promise<{
+  available: boolean;
+  state: AvailabilityResult['state'];
+}> {
+  if (typeof navigator === 'undefined' || !navigator.ai?.gemini) {
+    return { available: false, state: 'unsupported' };
+  }
+
   try {
-    // @ts-ignore — navigator.ai is not in standard TypeScript types yet
-    const gemini = navigator.ai?.gemini;
-    if (!gemini) return false;
-    
-    // The `ready` promise resolves when the model is downloaded
-    await gemini.ready;
-    return true;
+    const result = await navigator.ai.gemini.availability();
+    return {
+      available: result.state === 'available',
+      state: result.state,
+    };
   } catch {
-    return false;
+    return { available: false, state: 'unsupported' };
   }
 }
 
 /**
  * Create a model adapter that uses Gemini Nano via Prompt API.
- * Falls back to a provided cloud adapter if Gemini Nano is unavailable.
+ * 
+ * Usage:
+ *   const adapter = createGeminiNanoAdapter({
+ *     onUnavailable: () => useCloudFallback(),
+ *   });
+ *   await adapter.init();
+ *   const response = await adapter.complete("Analyze this fleet graph...");
  */
-export function createGeminiNanoAdapter(
-  onUnavailable?: () => void
-): ModelAdapter {
+export function createGeminiNanoAdapter(options?: {
+  onUnavailable?: () => void;
+  systemPrompt?: string;
+}): ModelAdapter {
+  let session: LanguageModelSession | null = null;
+
   return {
     name: 'gemini-nano',
-    available: false,  // will be set by init()
-    
+    available: false,
+    downloaded: false,
+
     async init(): Promise<boolean> {
-      const avail = await isGeminiNanoAvailable();
-      this.available = avail;
-      if (!avail && onUnavailable) onUnavailable();
-      return avail;
-    },
-    
-    async complete(prompt: string, context?: Record<string, unknown>): Promise<AIModelResponse> {
-      if (!this.available) {
-        throw new Error('Gemini Nano not available — use cloud fallback');
+      const { available, state } = await isGeminiNanoAvailable();
+
+      if (state === 'downloading' || state === 'updating') {
+        options?.onUnavailable?.();
+        return false;
       }
-      
+
+      if (!available) {
+        options?.onUnavailable?.();
+        return false;
+      }
+
       try {
-        // @ts-ignore — Prompt API not in standard types
-        const session = await navigator.ai.gemini.createModelSession();
+        const createOptions: LanguageModelCreateOptions = {};
         
-        // Build generation context from extra context
-        const context_parts = context 
-          ? Object.entries(context).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n')
-          : '';
-        
-        const fullPrompt = context_parts ? `${context_parts}\n\n${prompt}` : prompt;
-        
-        const result = await session.prompt(fullPrompt);
-        
-        return {
-          text: result,
-          finishReason: 'stop',
-        };
+        if (options?.systemPrompt) {
+          createOptions.systemPrompt = options.systemPrompt;
+        }
+
+        session = await navigator.ai!.gemini!.create(createOptions);
+        this.available = true;
+        this.downloaded = true;
+        return true;
+      } catch {
+        options?.onUnavailable?.();
+        return false;
+      }
+    },
+
+    async complete(prompt: string, context?: Record<string, unknown>): Promise<AIModelResponse> {
+      if (!session) {
+        throw new Error('Gemini Nano session not initialized — call init() first');
+      }
+
+      // Build context string from extra context
+      let fullPrompt = prompt;
+      if (context && Object.keys(context).length > 0) {
+        const contextParts = Object.entries(context)
+          .map(([k, v]) => `${k}: ${typeof v === 'object' ? JSON.stringify(v) : String(v)}`)
+          .join('\n');
+        fullPrompt = `Context:\n${contextParts}\n\n${prompt}`;
+      }
+
+      try {
+        const text = await session.prompt(fullPrompt);
+        return { text, finishReason: 'stop' };
       } catch (err) {
-        // If Gemini fails (model not ready, etc.), fall back
-        if (onUnavailable) onUnavailable();
+        // Session may have been invalidated — try to recreate
+        if (session) {
+          session.destroy();
+          session = null;
+          this.available = false;
+        }
+        options?.onUnavailable?.();
         throw err;
+      }
+    },
+
+    destroy(): void {
+      if (session) {
+        session.destroy();
+        session = null;
       }
     },
   };
@@ -87,8 +169,10 @@ export function createGeminiNanoAdapter(
 export interface ModelAdapter {
   name: string;
   available: boolean;
+  downloaded?: boolean;  // true when model is locally available (Gemini Nano)
   init(): Promise<boolean>;
   complete(prompt: string, context?: Record<string, unknown>): Promise<AIModelResponse>;
+  destroy?(): void;
 }
 
 /**
@@ -102,18 +186,15 @@ export function createCloudFallbackAdapter(config: {
 }): ModelAdapter {
   return {
     name: `cloud-${config.provider}`,
-    available: true,  // cloud is always "available" (network required)
-    
+    available: true,
+
     async init(): Promise<boolean> {
-      return true;  // no init needed for cloud
+      return true;
     },
-    
+
     async complete(prompt: string, context?: Record<string, unknown>): Promise<AIModelResponse> {
-      // Route to appropriate cloud API
-      // This is a simplified version — real implementation would use fetch directly
       const model = config.model ?? (config.provider === 'deepseek' ? 'deepseek-chat' : 'glm-5');
-      
-      // Build request based on provider
+
       if (config.provider === 'deepseek') {
         return completeDeepSeek(prompt, model, config.apiKey);
       } else {
@@ -140,15 +221,15 @@ async function completeDeepSeek(
       max_tokens: 1000,
     }),
   });
-  
+
   if (!res.ok) {
     throw new Error(`DeepSeek API error: ${res.status}`);
   }
-  
+
   const json = await res.json() as {
     choices: Array<{ message: { content: string }; finish_reason: string }>;
   };
-  
+
   return {
     text: json.choices[0]?.message?.content ?? '',
     finishReason: json.choices[0]?.finish_reason as 'stop' | 'max_tokens' | 'unknown' ?? 'unknown',
@@ -172,15 +253,15 @@ async function completeZai(
       max_tokens: 1000,
     }),
   });
-  
+
   if (!res.ok) {
     throw new Error(`z.ai API error: ${res.status}`);
   }
-  
+
   const json = await res.json() as {
     choices: Array<{ message: { content: string }; finish_reason: string }>;
   };
-  
+
   return {
     text: json.choices[0]?.message?.content ?? '',
     finishReason: json.choices[0]?.finish_reason as 'stop' | 'max_tokens' | 'unknown' ?? 'unknown',
@@ -193,18 +274,19 @@ async function completeZai(
 export async function createAutoAdapter(
   cloudConfig?: { provider: 'deepseek' | 'zai'; apiKey?: string; model?: string }
 ): Promise<ModelAdapter> {
-  const nanoAvailable = await isGeminiNanoAvailable();
-  
-  if (nanoAvailable) {
-    return createGeminiNanoAdapter(() => {
-      // If Gemini becomes unavailable later, switch to cloud
-      console.warn('[Agent] Gemini Nano became unavailable, will retry cloud');
-    });
+  const { available, state } = await isGeminiNanoAvailable();
+
+  if (available) {
+    return createGeminiNanoAdapter();
   }
-  
+
+  if (state === 'downloading') {
+    console.info('[Agent] Gemini Nano downloading in background, falling back to cloud');
+  }
+
   if (cloudConfig) {
     return createCloudFallbackAdapter(cloudConfig);
   }
-  
+
   throw new Error('No AI backend available and no cloud config provided');
 }
