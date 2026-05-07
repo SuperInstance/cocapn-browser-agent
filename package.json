@@ -1,0 +1,39 @@
+{
+  "name": "@cocapn/cocapn-browser-agent",
+  "version": "0.1.0",
+  "description": "Browser-native fleet agent using Chrome's built-in Gemini Nano AI. Zero-install coordination.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "tsc --noEmit"
+  },
+  "keywords": [
+    "browser",
+    "agent",
+    "gemini",
+    "chrome",
+    "fleet",
+    "cocapn"
+  ],
+  "dependencies": {
+    "@cocapn/fleet-coordinate-js": "file:../fleet-coordinate-js",
+    "@cocapn/plato-client": "file:../plato-client-js"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=18.0"
+  }
+}
